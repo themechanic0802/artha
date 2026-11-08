@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: artha
+Version: 0.0.1
+Summary: Project Artha: Indian equity trading agent (Phase 0: paper only)
+Requires-Python: >=3.11
+Requires-Dist: pandas
+Requires-Dist: numpy
+Requires-Dist: yfinance
+Requires-Dist: pyyaml
+Requires-Dist: python-dotenv
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"

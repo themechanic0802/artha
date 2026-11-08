@@ -1,0 +1,167 @@
+"""Evening preparation: candidates, news exclusions, watchlist and the prep note.
+
+run_day.py also calls `build_plan` as a fallback when no evening watchlist exists.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from datetime import date, datetime
+
+import yaml
+
+from .claude_cli import run_claude
+from .data.yfinance_source import YFinanceSource
+from .market_calendar import previous_trading_day
+from .settings import CACHE_DIR, CONFIG_DIR, IST, KNOWN_LIMITATIONS, REPORTS_DIR
+from .strategy.orb import StrategyParams
+from .strategy.watchlist import build_watchlist, candidates, market_filter, stock_metrics
+
+log = logging.getLogger("artha.prep")
+
+
+def plan_path(day: date):
+    return CACHE_DIR / f"watchlist-{day:%Y-%m-%d}.json"
+
+
+def build_plan(day: date, exclusions: dict[str, dict], web_check: str, src: YFinanceSource | None = None) -> dict:
+    """Everything run_day needs for `day`, using data up to the previous trading day."""
+    p = StrategyParams.from_config()
+    src = src or YFinanceSource()
+    uni = src.universe()
+    daily = src.daily(uni, period="6mo")
+    nifty = src.daily(["^NSEI"], period="6mo").get("^NSEI")
+    asof = previous_trading_day(day)
+    problems = list(src.problems)
+    metrics = stock_metrics(daily, asof, p)
+    stale = metrics[metrics.last_date != asof]
+    for r in stale.itertuples():
+        problems.append(f"{r.symbol}: latest daily data is {r.last_date}, expected {asof}; left out.")
+    metrics = metrics[metrics.last_date == asof]
+    cands = candidates(metrics, p)
+    wl = build_watchlist(metrics, set(exclusions), p)
+    mkt = market_filter(nifty, asof, p) if nifty is not None else None
+    if mkt is None:
+        problems.append("No Nifty data: market filter unknown, treated as OFF (no trades).")
+    elif mkt["date"] != asof:
+        problems.append(f"Nifty data ends {mkt['date']}, expected {asof}.")
+    return {
+        "for_date": str(day), "asof": str(asof), "built_at": datetime.now(IST).isoformat(timespec="seconds"),
+        "web_check": web_check,
+        "market": None if mkt is None else {k: (str(v) if k == "date" else v) for k, v in mkt.items()},
+        "candidates": cands[["symbol", "avg_traded_value_cr", "atr_pct", "prev_close"]].to_dict("records"),
+        "watchlist": wl[["symbol", "avg_traded_value_cr", "atr_pct", "prev_close"]].to_dict("records"),
+        "exclusions": exclusions,
+        "problems": problems,
+    }
+
+
+# ---- news / events check via Claude ---------------------------------------------
+NEWS_PROMPT = """You are the research assistant for Artha, a paper-trading system for Indian (NSE) stocks.
+Use web search to check each of these NSE stocks for the trading day {day} ({weekday}):
+{symbols}
+
+Exclude a stock if ANY of these applies:
+- quarterly/annual results announced or scheduled for {day} (or results released after market hours on {prev})
+- a board meeting scheduled on {day}
+- an ex-dividend, ex-split, ex-bonus or record date on {day}
+- major breaking company-specific news since {prev} (merger, regulatory action, large order, management exit, etc.)
+
+Only exclude when you found a concrete source. Do not exclude for general market news.
+Reply with ONLY a JSON object, no other text, in exactly this shape:
+{{"checked": ["SYMBOL", ...], "exclude": [{{"symbol": "SYMBOL", "reason": "one line", "source": "https://..."}}]}}
+"checked" must list every symbol you actually checked. Use the symbols exactly as given."""
+
+
+def parse_exclusions(text: str, allowed: set[str]) -> tuple[dict[str, dict], list[str]]:
+    """Validate Claude's answer. Raises ValueError if it can't be trusted at all."""
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        raise ValueError("no JSON object in the reply")
+    data = json.loads(m.group(0))
+    if not isinstance(data, dict) or not isinstance(data.get("exclude"), list):
+        raise ValueError("JSON missing an 'exclude' list")
+    out: dict[str, dict] = {}
+    for e in data["exclude"]:
+        sym = str(e.get("symbol", "")).strip().upper().removesuffix(".NS")
+        reason = " ".join(str(e.get("reason", "")).split())[:200]
+        source = str(e.get("source", "")).strip()[:300]
+        if sym not in allowed:
+            raise ValueError(f"unknown ticker in reply: {sym!r}")
+        if not reason or not source:
+            raise ValueError(f"exclusion for {sym} has no reason or source")
+        out[sym] = {"reason": reason, "source": source}
+    checked = {str(s).upper().removesuffix(".NS") for s in data.get("checked", [])}
+    unchecked = sorted(allowed - checked)
+    return out, unchecked
+
+
+def write_exclusions(day: date, exclusions: dict[str, dict], status: str) -> None:
+    doc = {"for_date": str(day), "generated_at": datetime.now(IST).isoformat(timespec="seconds"),
+           "web_check": status,
+           "excluded": [{"symbol": s, **v} for s, v in sorted(exclusions.items())]}
+    text = "# Generated by scripts/evening_prep.sh. Do not edit by hand.\n" + yaml.safe_dump(doc, sort_keys=False)
+    yaml.safe_load(text)  # must round-trip before we write it
+    (CONFIG_DIR / "exclusions.yaml").write_text(text)
+
+
+def news_check(day: date, symbols: list[str]) -> tuple[dict[str, dict], str]:
+    prompt = NEWS_PROMPT.format(day=day, weekday=f"{day:%A}", prev=previous_trading_day(day),
+                                symbols=", ".join(symbols))
+    ok, out = run_claude(prompt, allowed_tools=["WebSearch", "WebFetch"], timeout=1200)
+    if not ok:
+        log.warning("web check failed: %s", out)
+        return {}, f"FAILED: {out}"
+    try:
+        excl, unchecked = parse_exclusions(out, set(symbols))
+    except (ValueError, json.JSONDecodeError) as e:
+        log.warning("could not parse Claude reply (%s); first 300 chars: %r", e, out[:300])
+        return {}, f"FAILED: reply could not be validated ({e})"
+    status = "ok" if not unchecked else f"partial: not confirmed checked: {', '.join(unchecked)}"
+    return excl, status
+
+
+# ---- prep note -------------------------------------------------------------------
+def prep_note(plan: dict) -> str:
+    day = date.fromisoformat(plan["for_date"])
+    m = plan["market"]
+    if m is None:
+        mood = "Nifty data was unavailable, so the market filter is treated as OFF: **no trades tomorrow.**"
+    else:
+        trend = "above" if m["ok"] else "below"
+        mood = (f"Nifty closed at {m['close']:,.2f} on {m['date']}, {abs(m['distance_pct']):.2f}% {trend} its "
+                f"20-day average ({m['sma']:,.2f}). The 20-day average is the mean closing price of the last 20 "
+                f"trading days; being above it suggests an uptrend. ")
+        mood += ("**Market filter ON**: Artha may take breakout trades tomorrow." if m["ok"] else
+                 "**Market filter OFF**: Artha will watch but take no trades tomorrow (buying breakouts in a "
+                 "falling market tends to fail).")
+    wc = plan["web_check"]
+    web = ("News/events check: done." if wc == "ok" else
+           f"News/events check: **{wc}**. Artha will rely on the morning gap filter (skip any stock opening "
+           "more than 2% away from yesterday's close, a common sign of news)." if wc.startswith("FAILED")
+           else f"News/events check: {wc}.")
+    lines = [f"# Artha prep note for {day:%A %d %b %Y}", "",
+             f"_Built {plan['built_at']} (paper trading only, Phase 0)._", "",
+             "## Market mood", mood, "", "## Shortlist (watchlist)",
+             "Most-traded Nifty 50 stocks whose typical daily move (ATR%, the average daily price range as a % of "
+             "price) is between 1% and 3.5%, minus anything excluded below.", "",
+             "| # | Stock | Avg daily traded value | ATR% | Prev close |", "|---|---|---|---|---|"]
+    for i, r in enumerate(plan["watchlist"], 1):
+        lines.append(f"| {i} | {r['symbol']} | INR {r['avg_traded_value_cr']:,.0f} cr | {r['atr_pct']:.2f}% | {r['prev_close']:,.2f} |")
+    lines += ["", "## Exclusions", web, ""]
+    if plan["exclusions"]:
+        for s, v in plan["exclusions"].items():
+            lines.append(f"- **{s}**: {v['reason']} ([source]({v['source']}))")
+    else:
+        lines.append("- None.")
+    lines += ["", f"Stocks sent to the news check: {', '.join(c['symbol'] for c in plan['candidates'])}", ""]
+    if plan["problems"]:
+        lines += ["## Data problems"] + [f"- {x}" for x in plan["problems"]] + [""]
+    lines += ["## Known limitations", KNOWN_LIMITATIONS, ""]
+    return "\n".join(lines)
+
+
+def save(plan: dict) -> None:
+    plan_path(date.fromisoformat(plan["for_date"])).write_text(json.dumps(plan, indent=2, default=str))
+    (REPORTS_DIR / f"{plan['for_date']}-prep.md").write_text(prep_note(plan))

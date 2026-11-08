@@ -1,0 +1,16 @@
+# Strategy v0: opening range breakout (long only, intraday). Parameters are fixed
+# from CLAUDE.md and must NOT be tuned on the quick-backtest data.
+watchlist_size: 8
+liquidity_lookback_days: 20     # rank by 20-day average traded value
+atr_period: 14
+atr_pct_min: 1.0
+atr_pct_max: 3.5
+prep_candidates: 16             # stocks sent to the evening news check (2x watchlist)
+market_sma_days: 20             # trade only if Nifty prev close > 20-day SMA
+opening_range_start: "09:15"
+opening_range_end: "09:45"      # six 5-minute candles 09:15..09:40
+gap_filter_pct: 2.0
+volume_multiple: 1.5
+volume_lookback_sessions: 20
+reward_r_multiple: 2.0          # target = entry + 2R
+breakeven_trigger_r: 1.0        # move stop to entry once price reaches entry + 1R

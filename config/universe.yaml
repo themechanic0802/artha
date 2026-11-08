@@ -1,0 +1,12 @@
+# Nifty 50 constituents. Fallback list used when the NSE constituents CSV
+# (https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv) can't be fetched.
+# Taken from that CSV on 2026-11-08. Yahoo tickers add the ".NS" suffix.
+as_of: "2026-11-08"
+nse_csv_url: "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv"
+index_ticker: "^NSEI"
+symbols: [ADANIENT, ADANIPORTS, APOLLOHOSP, ASIANPAINT, AXISBANK, BSE, BAJAJ-AUTO,
+  BAJFINANCE, BAJAJFINSV, BEL, BHARTIARTL, CIPLA, COALINDIA, DRREDDY, EICHERMOT,
+  ETERNAL, GRASIM, HCLTECH, HDFCBANK, HDFCLIFE, HINDALCO, HINDUNILVR, ICICIBANK, ITC,
+  INFY, INDIGO, JSWSTEEL, JIOFIN, KOTAKBANK, LT, M&M, MARUTI, MAXHEALTH, NTPC,
+  NESTLEIND, ONGC, POWERGRID, RELIANCE, SBILIFE, SHRIRAMFIN, SBIN, SUNPHARMA, TCS,
+  TATACONSUM, TMPV, TATASTEEL, TECHM, TITAN, TRENT, ULTRACEMCO]

@@ -1,0 +1,12 @@
+# Risk limits for Artha. The risk layer (src/artha/risk/risk_manager.py) reads this
+# file once at start-up into a frozen (read-only) object. Change limits ONLY by
+# editing this file and committing with the reason in the commit message.
+capital: 10000                 # starting paper capital, INR
+risk_per_trade_pct: 1.5        # max loss per trade if the stop is hit (1.5% of equity = INR 150)
+daily_loss_limit_pct: 3.0      # stop new entries once realised + open loss reaches this (INR 300)
+max_open_positions: 2
+max_drawdown_pause_pct: 15     # halt the system and require owner review
+leverage: none                 # position notional is capped at available cash
+min_profit_to_cost_ratio: 2.0  # profit at target must be >= 2x round-trip costs
+no_new_entries_after: "14:30"  # IST; an entry filled later than this is rejected
+force_exit_at: "15:10"         # IST; all positions closed at this time

@@ -1,0 +1,19 @@
+[project]
+name = "artha"
+version = "0.0.1"
+description = "Project Artha: Indian equity trading agent (Phase 0: paper only)"
+requires-python = ">=3.11"
+dependencies = ["pandas", "numpy", "yfinance", "pyyaml", "python-dotenv"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

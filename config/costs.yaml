@@ -1,0 +1,11 @@
+# Zerodha equity INTRADAY charges (NSE). Rates change: verify every value against
+# https://zerodha.com/brokerage-calculator before Phase 1 and fill in verified_on.
+verified_on: null              # NOT YET VERIFIED - values below are from memory of Zerodha's published rates
+brokerage_flat_inr: 20         # per executed order: the LOWER of INR 20 or 0.03% of order value
+brokerage_pct: 0.03
+stt_sell_pct: 0.025            # Securities Transaction Tax, intraday, sell side only
+exchange_txn_pct: 0.00297      # NSE transaction charge, both sides
+sebi_per_crore_inr: 10         # SEBI turnover fee: INR 10 per crore, both sides
+stamp_duty_buy_pct: 0.003      # stamp duty, intraday, buy side only
+gst_pct: 18                    # GST on brokerage + exchange transaction + SEBI fee
+slippage_pct_per_side: 0.05    # assumed slippage on every entry and exit
