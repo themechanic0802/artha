@@ -28,7 +28,7 @@ from datetime import date, datetime, time, timedelta
 
 import pandas as pd
 
-from artha import prep
+from artha import live_status, prep
 from artha.costs import CostModel
 from artha.daybuild import candles_by_time, watch_items
 from artha.data.yfinance_source import YFinanceSource
@@ -195,6 +195,7 @@ def run_live(day: date, src: YFinanceSource) -> int:
     if late:
         problems.append(f"Started late at {launched:%H:%M}: signals before then are listed as missed.")
     live_tickers = list(s.stocks)
+    live_status.write(s, start_equity, "pre-open", problems)
 
     sleep_until(at(day, OPEN_AT) + timedelta(seconds=30))
     force_at = at(day, risk.limits.force_exit_at)
@@ -222,6 +223,7 @@ def run_live(day: date, src: YFinanceSource) -> int:
         except Exception as e:   # a bad poll must not kill the day
             problems.append(f"{now():%H:%M} data fetch failed: {type(e).__name__}: {e}")
             log.exception("poll failed")
+        live_status.write(s, start_equity, "live", problems)
         _time.sleep(POLL_SECONDS)
 
     # 15:10: close everything at the 15:10 candle's open (retry briefly for it to appear).
@@ -247,6 +249,7 @@ def run_live(day: date, src: YFinanceSource) -> int:
     if missing:
         problems.append(f"No 15:10 price for {', '.join(missing)}; closed at the last known price.")
     s.force_close_all(force_at, prices, "forced exit 15:10")
+    live_status.write(s, start_equity, "closed", problems)
 
     net = sum(t.net_pnl for t in broker.trades)
     ledger["equity"] = start_equity + net
@@ -260,6 +263,7 @@ def run_live(day: date, src: YFinanceSource) -> int:
     path.write_text(day_report(day, plan, s, risk, broker, start_equity, problems + src.problems,
                                "Live paper-trading day (yfinance data)"))
     log.info("report written: %s", path)
+    live_status.write(s, start_equity, "report ready", problems + src.problems)
     notify("Artha: day report ready", f"Net P&L {inr(net)} from {len(broker.trades)} trades")
     print(f"Report: {path}")
     return 0

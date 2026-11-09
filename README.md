@@ -2,6 +2,28 @@
 
 Artha is an automated research and paper-trading system for Nifty 50 stocks (Zerodha), built in phases. **Current phase: 0.** Artha trades on paper only, using free yfinance data. No real-order code exists. See `CLAUDE.md` for the rules and the roadmap.
 
+## Dashboard
+
+Everything Artha produces is on one page: `reports/dashboard.html`. To open it:
+
+```bash
+open ~/artha/reports/dashboard.html
+```
+
+Bookmark it. A background job rebuilds it every minute, and the page reloads itself every minute.
+
+- **Today**
+  - Account, today's P&L, open positions and market filter.
+  - A timeline of the day's jobs (done / running / missed).
+  - **1 · Start of day:** prep note, pre-market note, exclusions.
+  - **2 · During the day:** each stock's price, opening range and status, open positions, closed trades and a live activity feed. This is updated by `run_day.py` after every poll.
+  - **3 · End of day:** day report and journal.
+- **History:** the paper account curve, and every past day report and journal.
+- **Backtest:** the quick backtest summary.
+- **System health:** whether each scheduled job is loaded, missing setup (Claude token, cost check), and recent log lines.
+
+The dashboard only reads files. It cannot affect trading.
+
 ## Daily routine (Phase 0)
 
 | When (IST) | What runs | What you get |
@@ -10,6 +32,7 @@ Artha is an automated research and paper-trading system for Nifty 50 stocks (Zer
 | 08:40 on market days | `scripts/run_day.py` (wrapped in `caffeinate`) | notification "Artha: morning run started", `reports/YYYY-MM-DD-premarket.md` |
 | 15:35 | (same run) | `reports/YYYY-MM-DD.md` + notification "Artha: day report ready" |
 | 15:40 | `scripts/journal.sh` | `journal/YYYY-MM-DD.md` + notification "Artha: journal ready" |
+| every minute | `scripts/dashboard.py` | `reports/dashboard.html` refreshed |
 
 All three jobs fire every day, but they do nothing on weekends and NSE holidays (`config/holidays_2026.yaml`). Evening prep runs only when the *next* day is a market day: Friday's prep is skipped and Sunday's prepares Monday.
 
@@ -98,7 +121,7 @@ cd ~/artha && .venv/bin/python scripts/run_day.py --dry-run
 ~/artha/scripts/install_schedule.sh
 ```
 
-The first runs the unit tests and the second runs the quick backtest. The third replays the last market day in seconds. The fourth (re)installs the schedule, and `--uninstall` removes it.
+The first runs the unit tests and the second runs the quick backtest. The third replays the last market day in seconds. The fourth (re)installs the schedule, and `--uninstall` removes it. While a trading day is running, the installer leaves `com.artha.runday` alone so it can't stop the run.
 
 ## Layout
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import logging
+import time
 import urllib.request
 
 import pandas as pd
@@ -42,7 +43,23 @@ class YFinanceSource:
         return list(cfg["symbols"])
 
     # ---- downloads ------------------------------------------------------------
-    def _download(self, symbols: list[str], **kw) -> dict[str, pd.DataFrame]:
+    def _download(self, symbols: list[str], retries: int = 0, **kw) -> dict[str, pd.DataFrame]:
+        """Download candles. Symbols that come back empty are retried `retries` times:
+        Yahoo sometimes fails one ticker at random (e.g. ^NSEI on 8 Nov 2026)."""
+        out = self._download_once(symbols, **kw)
+        for attempt in range(retries):
+            missing = [s for s in symbols if s not in out]
+            if not missing:
+                break
+            time.sleep(3 * (attempt + 1))
+            log.info("retrying %s (attempt %d)", missing, attempt + 2)
+            out.update(self._download_once(missing, **kw))
+        for sym in symbols:
+            if sym not in out:
+                self.problems.append(f"No data returned for {sym} ({kw.get('interval')}).")
+        return out
+
+    def _download_once(self, symbols: list[str], **kw) -> dict[str, pd.DataFrame]:
         tickers = [to_yahoo(s) for s in symbols]
         raw = yf.download(tickers, group_by="ticker", auto_adjust=False, progress=False,
                           threads=True, **kw)
@@ -55,7 +72,6 @@ class YFinanceSource:
             except Exception:
                 df = pd.DataFrame()
             if df.empty:
-                self.problems.append(f"No data returned for {sym} ({kw.get('interval')}).")
                 continue
             idx = df.index
             df.index = idx.tz_localize(IST) if idx.tz is None else idx.tz_convert(IST)
@@ -63,7 +79,8 @@ class YFinanceSource:
         return out
 
     def daily(self, symbols: list[str], period: str = "6mo") -> dict[str, pd.DataFrame]:
-        return self._download(symbols, period=period, interval="1d")
+        # Daily data feeds the evening plan, so it is worth a couple of retries.
+        return self._download(symbols, retries=2, period=period, interval="1d")
 
     def intraday(self, symbols: list[str], period: str = "60d") -> dict[str, pd.DataFrame]:
         """5-minute candles labelled by start time. The newest candle may still be forming."""

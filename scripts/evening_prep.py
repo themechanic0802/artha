@@ -57,6 +57,8 @@ def main() -> int:
     log.info("wrote %s", note)
     print(f"Wrote {note}\nWeb check: {status}\nWatchlist: {', '.join(w['symbol'] for w in plan['watchlist'])}")
     mood = "ON" if plan["market"] and plan["market"]["ok"] else "OFF"
+    if plan["market"] is None:
+        mood = "UNKNOWN (no Nifty data, so no trades; re-run prep)"
     notify("Artha: prep note ready", f"{day:%a %d %b}: market filter {mood}, {len(plan['watchlist'])} stocks, "
                                      f"{len(excl)} excluded" + ("" if status == "ok" else " (news check incomplete)"))
     return 0
