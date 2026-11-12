@@ -40,6 +40,7 @@ from artha.reporting.report import GLOSSARY, inr, session_events_md, trades_md
 from artha.risk.risk_manager import RiskLimits, RiskManager
 from artha.settings import CACHE_DIR, IST, KNOWN_LIMITATIONS, LOGS_DIR, REPORTS_DIR
 from artha.strategy.orb import StrategyParams
+from artha.strategy.watchlist import market_filter
 
 log = logging.getLogger("artha.run_day")
 LEDGER = CACHE_DIR / "paper_ledger.json"
@@ -75,10 +76,31 @@ def save_ledger(ledger: dict) -> None:
 def load_plan(day: date, problems: list[str], src: YFinanceSource) -> dict:
     path = prep.plan_path(day)
     if path.exists():
-        return json.loads(path.read_text())
+        plan = json.loads(path.read_text())
+        if plan.get("market") is None:
+            recheck_market(day, plan, problems, src)
+        return plan
     problems.append("No evening watchlist found: built one now WITHOUT news exclusions. "
                     "Check that evening prep ran (see README).")
     return prep.build_plan(day, {}, "FAILED: no evening prep for this day", src)
+
+
+def recheck_market(day: date, plan: dict, problems: list[str], src: YFinanceSource) -> None:
+    """Evening prep had no Nifty data (so: no trades). Try once more before the open."""
+    asof = previous_trading_day(day)
+    try:
+        nifty = src.index_daily("^NSEI", period="6mo")
+        mkt = market_filter(nifty, asof, StrategyParams.from_config()) if nifty is not None else None
+    except Exception as e:
+        mkt = None
+        log.warning("market re-check failed: %s", e)
+    if mkt is None or mkt["date"] != asof:
+        problems.append("Market filter unknown at prep and still unavailable at 08:45: no trades today.")
+        return
+    plan["market"] = {k: (str(v) if k == "date" else v) for k, v in mkt.items()}
+    problems.append(f"Market filter was missing from evening prep; re-checked at {now():%H:%M}: "
+                    f"{'ON' if mkt['ok'] else 'OFF'} (Nifty {mkt['close']:,.2f} vs 20-day average {mkt['sma']:,.2f}).")
+    log.info("market filter re-checked: %s", plan["market"])
 
 
 def premarket_note(day: date, plan: dict, equity: float, flagged: list[str]) -> str:

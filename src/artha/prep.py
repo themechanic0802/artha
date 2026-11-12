@@ -31,7 +31,7 @@ def build_plan(day: date, exclusions: dict[str, dict], web_check: str, src: YFin
     src = src or YFinanceSource()
     uni = src.universe()
     daily = src.daily(uni, period="6mo")
-    nifty = src.daily(["^NSEI"], period="6mo").get("^NSEI")
+    nifty = src.index_daily("^NSEI", period="6mo")
     asof = previous_trading_day(day)
     problems = list(src.problems)
     metrics = stock_metrics(daily, asof, p)

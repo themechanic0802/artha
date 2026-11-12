@@ -80,5 +80,37 @@ def test_download_retries_missing_symbols(monkeypatch):
     monkeypatch.setattr(yfinance_source.YFinanceSource, "_download_once", fake_once)
     monkeypatch.setattr(yfinance_source.time, "sleep", lambda s: None)
     src = yfinance_source.YFinanceSource()
-    out = src.daily(["^NSEI"])
+    out = src.daily(["^NSEI"], fill_gaps=False)
     assert "^NSEI" in out and calls == [["^NSEI"], ["^NSEI"]] and not src.problems
+
+
+def _bars(index, close):
+    return pd.DataFrame({"Open": close, "High": close, "Low": close, "Close": close, "Volume": 1},
+                        index=pd.DatetimeIndex(index).tz_localize(IST))
+
+
+def test_index_daily_fills_missing_days_from_5m(monkeypatch):
+    daily = _bars(["2026-11-06", "2026-11-09"], [1.0, 2.0])
+    intra = _bars(["2026-11-09 15:25", "2026-11-11 09:15", "2026-11-11 15:25"], [2.0, 2.5, 3.0])
+
+    def fake_once(self, symbols, **kw):
+        return {symbols[0]: (daily if kw["interval"] == "1d" else intra).copy()}
+
+    monkeypatch.setattr(yfinance_source.YFinanceSource, "_download_once", fake_once)
+    src = yfinance_source.YFinanceSource()
+    out = src.index_daily("^NSEI")
+    assert [str(d) for d in out.index.date] == ["2026-11-06", "2026-11-09", "2026-11-11"]
+    assert out.Close.iloc[-1] == 3.0 and out.Open.iloc[-1] == 2.5
+    assert any("rebuilt from 5-minute" in p for p in src.problems)
+    assert out.Close.iloc[1] == 2.0   # an existing daily bar is never replaced
+
+
+def test_index_daily_survives_empty_daily(monkeypatch):
+    intra = _bars(["2026-11-11 09:15", "2026-11-11 15:25"], [2.5, 3.0])
+    monkeypatch.setattr(yfinance_source.YFinanceSource, "_download_once",
+                        lambda self, symbols, **kw: {} if kw["interval"] == "1d" else {symbols[0]: intra.copy()})
+    monkeypatch.setattr(yfinance_source.time, "sleep", lambda s: None)
+    src = yfinance_source.YFinanceSource()
+    out = src.index_daily("^NSEI")
+    assert len(out) == 1 and out.Close.iloc[0] == 3.0
+    assert not any("No data returned" in p for p in src.problems)

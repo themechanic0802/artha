@@ -78,9 +78,49 @@ class YFinanceSource:
             out[sym] = df.sort_index()
         return out
 
-    def daily(self, symbols: list[str], period: str = "6mo") -> dict[str, pd.DataFrame]:
-        # Daily data feeds the evening plan, so it is worth a couple of retries.
-        return self._download(symbols, retries=2, period=period, interval="1d")
+    def daily(self, symbols: list[str], period: str = "6mo", fill_gaps: bool = True) -> dict[str, pd.DataFrame]:
+        """Daily bars. Daily data feeds the evening plan, so it is worth a couple of retries.
+
+        Yahoo's daily series is unreliable for recent days: on 8 and 11 Nov 2026 ^NSEI came
+        back empty in the evening, and early on 12 Nov every stock lacked 11 Nov, while the
+        5-minute series had every day. With fill_gaps, completed sessions missing from the
+        daily data are rebuilt from 5-minute candles (first open, high, low, last close,
+        summed volume, which slightly undercounts auction volume).
+        """
+        before = len(self.problems)
+        out = self._download(symbols, retries=2, period=period, interval="1d")
+        if not fill_gaps:
+            return out
+        # Only the last few sessions go missing in practice; fetch 60 days if a symbol has nothing.
+        whole = any(s not in out for s in symbols)
+        intra = self.intraday(symbols, period="60d" if whole else "5d")
+        now = pd.Timestamp.now(tz=IST)
+        filled: dict[str, list] = {}
+        for sym, df in intra.items():
+            bars = df.groupby(df.index.date).agg(Open=("Open", "first"), High=("High", "max"), Low=("Low", "min"),
+                                                 Close=("Close", "last"), Volume=("Volume", "sum"))
+            # Never build a bar for a session that is still trading.
+            bars = bars[[d < now.date() or now.time() >= pd.Timestamp("15:35").time() for d in bars.index]]
+            have = set(out[sym].index.date) if sym in out else set()
+            missing = [d for d in bars.index if d not in have]
+            if not missing:
+                continue
+            add = bars.loc[missing]
+            add.index = pd.DatetimeIndex([pd.Timestamp(d, tz=IST) for d in missing])
+            out[sym] = add if sym not in out else pd.concat([out[sym], add]).sort_index()
+            filled[sym] = missing
+        # The daily download's "no data" notes are superseded where the gap was repaired.
+        self.problems[before:] = [x for x in self.problems[before:]
+                                  if not any(x.startswith(f"No data returned for {s} ") for s in filled)]
+        if filled:
+            days = sorted({str(d) for v in filled.values() for d in v})
+            self.problems.append(f"Yahoo's daily data lacked {', '.join(days)} for {len(filled)} symbol(s); "
+                                 "rebuilt from 5-minute candles.")
+            log.info("daily gaps filled from 5m: %s", {k: [str(d) for d in v] for k, v in filled.items()})
+        return out
+
+    def index_daily(self, symbol: str = "^NSEI", period: str = "6mo") -> pd.DataFrame | None:
+        return self.daily([symbol], period=period).get(symbol)
 
     def intraday(self, symbols: list[str], period: str = "60d") -> dict[str, pd.DataFrame]:
         """5-minute candles labelled by start time. The newest candle may still be forming."""
